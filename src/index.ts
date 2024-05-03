@@ -5,9 +5,10 @@ import csv from 'csvtojson';
 
 import haversine from 'haversine';
 
-const BASE_URL = 'https://gist.githubusercontent.com/';
-const END_POINT =
+const baseUrl = 'https://gist.githubusercontent.com/';
+const endPoint =
   'bgdavidx/132a9e3b9c70897bc07cfa5ca25747be/raw/8dbbe1db38087fad4a8c8ade48e741d6fad8c872/gistfile1.txt';
+const dateKeyRx = /time/i;
 
 interface IFlight {
   departureTime: Date;
@@ -39,9 +40,8 @@ let airports: IAirport[];
 const app = express();
 app.use(bodyParser.json());
 
-const dateKeyRx = /time/i;
 const api = axios.create({
-  baseURL: BASE_URL,
+  baseURL: baseUrl,
   transformResponse: (data) =>
     JSON.parse(data, (key, value) =>
       dateKeyRx.test(key) ? new Date(value) : value
@@ -61,21 +61,20 @@ app.post('/search', async (req: Request, res: Response) => {
       `Params: ${minTime}, ${maxTime}, ${maxDurationInMills}, ${preferredCarrier}`
     );
 
-    const airports = await getAirports();
-    const flights: IFlight[] = (
-      await api.get<IFlight[]>(END_POINT)
-    ).data.filter((v) => {
-      console.log(
-        `Flight time: ${flightTime(v) / 3600 / 1000} - max: ${
-          maxDurationInMills / 3600 / 1000
-        }\n Departure: ${v.departureTime.toISOString()} [min:${minTime.toISOString()}; max:${maxTime.toISOString()}]`
-      );
-      return (
-        flightTime(v) <= maxDurationInMills &&
-        v.departureTime >= minTime &&
-        v.departureTime <= maxTime
-      );
-    });
+    const flights: IFlight[] = (await api.get<IFlight[]>(endPoint)).data.filter(
+      (v) => {
+        console.log(
+          `Flight time: ${flightTime(v) / 3600 / 1000} - max: ${
+            maxDurationInMills / 3600 / 1000
+          }\n Departure: ${v.departureTime.toISOString()} [min:${minTime.toISOString()}; max:${maxTime.toISOString()}]`
+        );
+        return (
+          flightTime(v) <= maxDurationInMills &&
+          v.departureTime >= minTime &&
+          v.departureTime <= maxTime
+        );
+      }
+    );
 
     console.log('All flights, ', flights.length);
 
@@ -99,16 +98,18 @@ app.post('/search', async (req: Request, res: Response) => {
     console.log('Result flights, ', scoredFlights.length);
     res.status(201).send(JSON.stringify(scoredFlights));
   } catch (e) {
-    console.log('Error', e);
+    console.log('Future error handling', e);
     res.status(500).send({ msg: 'Unknown error' });
   }
 });
 
 app.listen(3000, async () => {
-  //receive initial cache data;
-  airports = await getAirports();
-
-  console.log(`Server started...\nFound: ${airports.length} airports to serve`);
+  try {
+    airports = await getAirports();
+    console.log(`Server started...\nFound: ${airports.length} airports`);
+  } catch (e) {
+    console.log(`Cannot fetch airports`, e);
+  }
 });
 
 function flightTime(value: IFlight): number {
@@ -144,5 +145,5 @@ async function getAirports(): Promise<IAirport[]> {
       'source',
     ],
     checkType: true,
-  }).fromFile('airports.dat.txt');
+  }).fromFile('airports.dat');
 }
