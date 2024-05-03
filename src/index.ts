@@ -9,6 +9,7 @@ const baseUrl = 'https://gist.githubusercontent.com/';
 const endPoint =
   'bgdavidx/132a9e3b9c70897bc07cfa5ca25747be/raw/8dbbe1db38087fad4a8c8ade48e741d6fad8c872/gistfile1.txt';
 const dateKeyRx = /time/i;
+const PORT = 3000;
 
 interface IFlight {
   departureTime: Date;
@@ -55,55 +56,57 @@ app.post('/search', async (req: Request, res: Response) => {
   try {
     const minTime = new Date(minDepartureTime);
     const maxTime = new Date(maxDepartureTime);
-    const maxDurationInMills = Number.parseInt(maxDuration) * 3600 * 1000;
+    const maxDurationInHours = Number.parseInt(maxDuration);
 
     console.log(
-      `Params: ${minTime}, ${maxTime}, ${maxDurationInMills}, ${preferredCarrier}`
+      `Params: ${minTime}, ${maxTime}, ${maxDurationInHours}, ${preferredCarrier}`
     );
 
-    const flights: IFlight[] = (await api.get<IFlight[]>(endPoint)).data.filter(
-      (v) => {
-        console.log(
-          `Flight time: ${flightTime(v) / 3600 / 1000} - max: ${
-            maxDurationInMills / 3600 / 1000
-          }\n Departure: ${v.departureTime.toISOString()} [min:${minTime.toISOString()}; max:${maxTime.toISOString()}]`
-        );
-        return (
-          flightTime(v) <= maxDurationInMills &&
-          v.departureTime >= minTime &&
-          v.departureTime <= maxTime
-        );
-      }
-    );
+    const allFlights = (await api.get<IFlight[]>(endPoint)).data;
+    console.log('All flights, ', allFlights.length);
 
-    console.log('All flights, ', flights.length);
+    const resultFlights: IFlight[] = allFlights.filter((v) => {
+      const flightTime = flightTimeInHours(v);
+      console.log(
+        `Departure: ${v.departureTime.toLocaleString()}\n
+         Arrival: ${v.arrivalTime.toLocaleString()}\n
+         [flight time: ${flightTime}h; min:${minTime.toISOString()}; max:${maxTime.toISOString()}]`
+      );
 
-    const scoredFlights = await Promise.all(
-      flights.map(async (value) => {
-        const timeInAir = flightTime(value);
-
-        const carrierDelta = value.carrier === preferredCarrier ? 0.9 : 1.0;
-        const distance = await getDistanceBetweenAirports(
-          value.origin,
-          value.destination
-        );
-        value.score = timeInAir * carrierDelta + distance;
-        return value;
-      })
-    );
-    scoredFlights.sort((left, right) => {
-      return right.score - left.score;
+      return (
+        flightTime <= maxDurationInHours &&
+        v.departureTime.getTime() >= minTime.getTime() &&
+        v.departureTime.getTime() <= maxTime.getTime()
+      );
     });
+
+    //make parallel calculations
+    const scoredFlights = (
+      await Promise.all(
+        resultFlights.map(async (value) => {
+          const flightTime = flightTimeInHours(value);
+          const carrierCoefficient =
+            value.carrier === preferredCarrier ? 0.9 : 1.0;
+          const distance = await getDistanceBetweenAirports(
+            value.origin,
+            value.destination
+          );
+
+          value.score = flightTime * carrierCoefficient + distance;
+          return value;
+        })
+      )
+    ).sort((left, right) => right.score - left.score);
 
     console.log('Result flights, ', scoredFlights.length);
     res.status(201).send(JSON.stringify(scoredFlights));
   } catch (e) {
-    console.log('Future error handling', e);
+    console.log('Error', e);
     res.status(500).send({ msg: 'Unknown error' });
   }
 });
 
-app.listen(3000, async () => {
+app.listen(PORT, async () => {
   try {
     airports = await getAirports();
     console.log(`Server started...\nFound: ${airports.length} airports`);
@@ -112,16 +115,20 @@ app.listen(3000, async () => {
   }
 });
 
-function flightTime(value: IFlight): number {
-  return value.arrivalTime.getTime() - value.departureTime.getTime();
+function flightTimeInHours(value: IFlight): number {
+  return Math.floor(
+    ((value.arrivalTime.getTime() - value.departureTime.getTime()) /
+      (1000 * 60 * 60)) %
+      24
+  );
 }
 
 async function getDistanceBetweenAirports(
-  origin: string,
-  destination: string
+  departureCode: string,
+  destinationCode: string
 ): Promise<number> {
-  const originAirport = airports.find((value) => value.iata == origin);
-  const destAirport = airports.find((value) => value.iata == destination);
+  const originAirport = airports.find((value) => value.iata == departureCode);
+  const destAirport = airports.find((value) => value.iata == destinationCode);
 
   return haversine(originAirport, destAirport);
 }
